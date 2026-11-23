@@ -1,0 +1,244 @@
+# Goemon64Recomp-NX subset of DK64Recomp-NX switch/patches/gliden64.patch
+# Target: gonetz/GLideN64 @ 41c7ba273a6c9afb43c0574cf3cf5d139182d070
+# Applied by scripts/build-nro.sh (idempotent: reverse --check then apply --check).
+#
+# Included:
+#   Combiner shader-save (HOME never reaches RomClosed)
+#   Texture cache cap 8000 (matches __nx_nv_transfermem_size = 32 MiB)
+#   atomicops.h: POSIX semaphore under __SWITCH__
+#   GBI.cpp: RT64EX_Init after F3DEX (Goemon) and F3DEX2
+#   RSP.cpp: RT64EX_OnCommand in the DL loop
+#   RSP.h: RSP_SegmentToPhysicalEx (512 MiB RDRAM, no 8 MiB mask)
+#   F3D.cpp + F3DEX2.cpp: unmasked gSPSegment (Goemon uses F3DEX / F3D_MoveWord)
+#   gSP.cpp: no hunk — gSPSegment stores the base as-is; masking is in
+#            RSP_SegmentToPhysicalEx (switch/gliden64_rt64ex.cpp)
+#
+# gEX* no-op (ENABLE / SETREFRESHRATE / MATRIXGROUP / POPMATRIXGROUP, no interp
+# / extra FBO) lives in switch/gliden64_rt64ex.cpp, not in this patch.
+#
+#   TextureCache::update: promote wide CI texrect loads to one-piece BG
+#   (Goemon parallax sheets; walking was a glTexImage2D storm on nouveau)
+#   _updateBackground: address-keyed CRC for those sheets
+#   TextureCache hits/misses accessors (nxlink texcache lines)
+#
+# Excluded (interpolation / 16:9 / DK64 harness — later phases):
+#   FrameBuffer interp FBOs, GraphicsDrawer adjust/maxY, GLSL combiner
+#   gDP scissor flags, gSP OnMatrix/OnVertices/OnDecision
+#
+diff --git a/src/Combiner.cpp b/src/Combiner.cpp
+index c7858372..0e13c338 100644
+--- a/src/Combiner.cpp
++++ b/src/Combiner.cpp
+@@ -413,6 +413,14 @@ void CombinerInfo::setPolygonMode(DrawingState _drawingState)
+ 	}
+ }
+ 
++void CombinerInfo::saveShadersStorageIfChanged()
++{
++	if (config.generalEmulation.enableShadersStorage == 0 || m_shadersLoaded >= m_combiners.size())
++		return;
++	gfxContext.saveShadersStorage(m_combiners);
++	m_shadersLoaded = static_cast<u32>(m_combiners.size());
++}
++
+ void CombinerInfo::_saveShadersStorage() const
+ {
+ 	if (m_shadersLoaded >= m_combiners.size())
+diff --git a/src/Combiner.h b/src/Combiner.h
+index bc69b8e7..83d357e9 100644
+--- a/src/Combiner.h
++++ b/src/Combiner.h
+@@ -148,6 +148,8 @@ public:
+ 
+ 	void setPolygonMode(DrawingState _drawingState);
+ 	bool isRectMode() const { return m_rectMode; }
++	// HOME never reaches plugin shutdown, so flush the shader cache from VidExt swap.
++	void saveShadersStorageIfChanged();
+ 
+ private:
+ 	CombinerInfo()
+diff --git a/src/GBI.cpp b/src/GBI.cpp
+index 04236122..2a2f264f 100644
+--- a/src/GBI.cpp
++++ b/src/GBI.cpp
+@@ -8,6 +8,8 @@
+ #include "N64.h"
+ #include "GLideN64.h"
+ #include "GBI.h"
++
++void RT64EX_Init();
+ #include "RDP.h"
+ #include "RSP.h"
+ #include "uCodes/F3D.h"
+@@ -223,11 +225,13 @@ void GBIInfo::_makeCurrent(MicrocodeInfo * _pCurrent)
+ 				break;
+ 			case F3DEX:
+ 				F3DEX_Init();
++				RT64EX_Init(); // Goemon64-NX: gEX* (opcode 0x64) emitted by recomp patches
+ 				m_hwlSupported = true;
+ 				gSP.clipRatio = m_pCurrent->Rej ? 2U : 1U;
+ 			break;
+ 			case F3DEX2:
+ 				F3DEX2_Init();
++				RT64EX_Init(); // Goemon64-NX: gEX* (opcode 0x64) emitted by recomp patches
+ 				m_hwlSupported = true;
+ 				gSP.clipRatio = 2U;
+ 			break;
+diff --git a/src/Graphics/OpenGLContext/ThreadedOpenGl/atomicops.h b/src/Graphics/OpenGLContext/ThreadedOpenGl/atomicops.h
+index ff828ca8..513c31d1 100644
+--- a/src/Graphics/OpenGLContext/ThreadedOpenGl/atomicops.h
++++ b/src/Graphics/OpenGLContext/ThreadedOpenGl/atomicops.h
+@@ -349,7 +349,7 @@ extern "C" {
+ }
+ #elif defined(__MACH__)
+ #include <mach/mach.h>
+-#elif defined(__unix__)
++#elif defined(__unix__) || defined(__SWITCH__)
+ #include <semaphore.h>
+ #endif
+ 
+@@ -483,7 +483,7 @@ namespace moodycamel
+ 				}
+ 			}
+ 		};
+-#elif defined(__unix__)
++#elif defined(__unix__) || defined(__SWITCH__)
+ 		//---------------------------------------------------------
+ 		// Semaphore (POSIX, Linux)
+ 		//---------------------------------------------------------
+diff --git a/src/RSP.cpp b/src/RSP.cpp
+index b66c782c..b159fcc6 100644
+--- a/src/RSP.cpp
++++ b/src/RSP.cpp
+@@ -56,6 +56,7 @@ void _ProcessDList()
+ 			--pci;
+ 		RSP.nextCmd = _SHIFTR(*(u32*)&RDRAM[RSP.PC[pci]], 24, 8);
+ 
++		RT64EX_OnCommand(RSP.w0, RSP.w1);
+ 		GBI.cmd[RSP.cmd](RSP.w0, RSP.w1);
+ 		RSP_CheckDLCounter();
+ 	}
+diff --git a/src/RSP.h b/src/RSP.h
+index bf3ba27e..7c046bc4 100644
+--- a/src/RSP.h
++++ b/src/RSP.h
+@@ -22,7 +22,11 @@ extern RSPInfo RSP;
+ extern u32 DepthClearColor;
+ extern u32 rectDepthBufferCopyFrame;
+ 
+-#define RSP_SegmentToPhysical( segaddr ) ((gSP.segment[(segaddr >> 24) & 0x0F] + (segaddr & RDRAMSize)) & RDRAMSize)
++// Goemon64-NX: RT64 segment rules + 512 MiB RDRAM live in switch/gliden64_rt64ex.cpp.
++u32 RSP_SegmentToPhysicalEx(u32 segaddr);
++#define RSP_SegmentToPhysical( segaddr ) RSP_SegmentToPhysicalEx(segaddr)
++
++void RT64EX_OnCommand(u32 w0, u32 w1);
+ 
+ void RSP_Init();
+ void RSP_ProcessDList();
+diff --git a/src/Textures.cpp b/src/Textures.cpp
+index 847289ab..bdd249d4 100644
+--- a/src/Textures.cpp
++++ b/src/Textures.cpp
+@@ -804,7 +804,8 @@ void TextureCache::_checkHdTexLimit()
+ 
+ void TextureCache::_checkCacheSize()
+ {
+-	if (m_textures.size() >= m_maxCacheSize) {
++	// Cap is 8000 (nv transfermem 32 MiB). Loop so a later runtime cap still drains.
++	while (!m_textures.empty() && m_textures.size() >= m_maxCacheSize) {
+ 		CachedTexture& clsTex = m_textures.back();
+ 		if (clsTex.bHDTexture)
+ 			m_hdTexCacheSize -= clsTex.textureBytes;
+@@ -1957,12 +1958,21 @@ void TextureCache::activateMSDummy(u32 _t)
+ 	gfxContext.setTextureParameters(params);
+ }
+ 
++extern bool g_goemonBgAddressCrc;
++
+ void TextureCache::_updateBackground()
+ {
+ 	u32 numBytes = gSP.bgImage.width * gSP.bgImage.height << gSP.bgImage.size >> 1;
+ 	u64 crc;
+ 
+-	crc = CRC_Calculate( UINT64_MAX, &RDRAM[gSP.bgImage.address], numBytes );
++	if (g_goemonBgAddressCrc) {
++		g_goemonBgAddressCrc = false;
++		const u32 key[4] = { gSP.bgImage.address, gSP.bgImage.width, gSP.bgImage.format,
++							 gSP.bgImage.size };
++		crc = CRC_Calculate(UINT64_MAX, key, sizeof(key));
++	} else {
++		crc = CRC_Calculate( UINT64_MAX, &RDRAM[gSP.bgImage.address], numBytes );
++	}
+ 
+ 	if (gDP.otherMode.textureLUT != G_TT_NONE || gSP.bgImage.format == G_IM_FMT_CI) {
+ 		if (gSP.bgImage.size == G_IM_SIZ_4b)
+@@ -2060,9 +2070,17 @@ void TextureCache::toggleDumpTex()
+ 	}
+ }
+ 
++bool RT64EX_PromoteGoemonBackground(u32 t);
++
+ void TextureCache::update(u32 _t)
+ {
++	if (RT64EX_PromoteGoemonBackground(_t)) {
++		_updateBackground();
++		return;
++	}
+ 	const gDPTile * pTile = gSP.textureTile[_t];
++	if (pTile == nullptr)
++		return;
+ 	switch (pTile->textureMode) {
+ 	case TEXTUREMODE_BGIMAGE:
+ 		_updateBackground();
+diff --git a/src/Textures.h b/src/Textures.h
+index b129458f..02bf1fe0 100644
+--- a/src/Textures.h
++++ b/src/Textures.h
+@@ -67,6 +67,9 @@ struct TextureCache
+ 	void activateMSDummy(u32 _t);
+ 	void update(u32 _t);
+ 	void toggleDumpTex();
++	u32 hits() const { return m_hits; }
++	u32 misses() const { return m_misses; }
++	u32 cachedCount() const { return static_cast<u32>(m_textures.size()); }
+ 
+ 	static TextureCache & get();
+ 
+@@ -113,9 +116,9 @@ private:
+ 	std::vector<u32> m_tempTextureHolder;
+ 
+ #ifdef VC
+-	const size_t m_maxCacheSize = 1500u;
++	size_t m_maxCacheSize = 1500u;
+ #else
+-	const size_t m_maxCacheSize = 8000u;
++	size_t m_maxCacheSize = 8000u;
+ #endif
+ 	u64 m_hdTexCacheSize = 0u;
+ };
+diff --git a/src/uCodes/F3D.cpp b/src/uCodes/F3D.cpp
+index bc6bbffc..abb01602 100644
+--- a/src/uCodes/F3D.cpp
++++ b/src/uCodes/F3D.cpp
+@@ -150,7 +150,7 @@ void F3D_MoveWord( u32 w0, u32 w1 )
+ 			gSPClipRatio( w1 );
+ 			break;
+ 		case G_MW_SEGMENT:
+-			gSPSegment( _SHIFTR( w0, 10, 4 ), w1 & 0x00FFFFFF );
++			gSPSegment( _SHIFTR( w0, 10, 4 ), w1 ); // F3DEX (Goemon); masked in RSP_SegmentToPhysicalEx
+ 			break;
+ 		case G_MW_FOG:
+ /*			u32 fm, fo, min, max;
+diff --git a/src/uCodes/F3DEX2.cpp b/src/uCodes/F3DEX2.cpp
+index dc982986..75dfff4e 100644
+--- a/src/uCodes/F3DEX2.cpp
++++ b/src/uCodes/F3DEX2.cpp
+@@ -93,7 +93,7 @@ void F3DEX2_MoveWord( u32 w0, u32 w1 )
+ 			gSPClipRatio( w1 );
+ 			break;
+ 		case G_MW_SEGMENT:
+-			gSPSegment( _SHIFTR( w0, 2, 4 ) , w1 & 0x00FFFFFF );
++			gSPSegment( _SHIFTR( w0, 2, 4 ) , w1 ); // masked in RSP_SegmentToPhysicalEx
+ 			break;
+ 		case G_MW_FOG:
+ 			gSPFogFactor( (s16)_SHIFTR( w1, 16, 16 ), (s16)_SHIFTR( w1, 0, 16 ) );

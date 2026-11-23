@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Drop into (or run a command in) the switch-sdk container.
+# Pass --network-host as the first argument for nxlink / LAN debug.
+# Artix docker compose often rejects `run --network`; host-network uses docker run.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/common.sh
+source "${ROOT}/scripts/common.sh"
+
+if in_container; then
+  die "already inside a container; run the command directly"
+fi
+
+require_cmd docker
+# UID is bash-readonly; export it so docker compose can interpolate HOST_UID.
+export UID
+export GID
+
+ensure_image() {
+  if docker image inspect "${SWITCH_SDK_IMAGE}" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "== building ${SWITCH_SDK_IMAGE} =="
+  compose build switch-sdk
+}
+
+if [[ "${1:-}" == "--network-host" ]]; then
+  shift
+  if (($# == 0)); then
+    set -- bash
+  fi
+  ensure_image
+  docker_tty=()
+  if [[ -t 0 ]]; then
+    docker_tty+=(-it)
+  else
+    docker_tty+=(-i)
+  fi
+  exec docker run --rm "${docker_tty[@]}" --network host \
+    -v "${ROOT}:/work" -w /work \
+    -e GOEMON64_IN_CONTAINER=1 \
+    -e GOEMON64_SWITCH_SDK=1 \
+    -e DEVKITPRO=/opt/devkitpro \
+    -e "HOST_UID=${UID:-$(id -u)}" \
+    -e "HOST_GID=${GID}" \
+    "${SWITCH_SDK_IMAGE}" \
+    "$@"
+fi
+
+ensure_image
+
+tty_args=()
+if [[ ! -t 0 ]]; then
+  tty_args+=(-T)
+fi
+if (($# == 0)); then
+  set -- bash
+fi
+compose run --rm "${tty_args[@]}" switch-sdk "$@"

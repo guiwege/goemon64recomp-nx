@@ -1,0 +1,209 @@
+# Goemon64Recomp-NX patch on klorfmorf/N64ModernRuntime @ goemon-patches
+# (fc4592a31414daf0040c19907e0b1976b2e48a67)
+# Applied by scripts/build-nro.sh (idempotent: reverse --check then apply --check).
+#
+#   error_handling.cpp: std::_Exit on __SWITCH__ (no std::quick_exit)
+#   events.cpp: coalesce stale ScreenUpdateActions so GLideN64 vsync present
+#               cannot starve display lists (DK64-NX "freeze on the Nintendo logo");
+#               VI thread waits on display vsync (goemon64nx_wait_vsync) on Switch
+#   files.cpp: Switch save rotation via rename+remove (libstdc++ copy_file
+#              ends in fchmod, which the libnx SD driver rejects with ENOSYS)
+#   pi.cpp: save init/read/write logs; flush save on saving-thread exit
+#   pak.cpp: osPfsReadWriteFile logs (first 4 + every 30)
+#
+diff --git a/librecomp/src/files.cpp b/librecomp/src/files.cpp
+index af6f18d..b94dc31 100644
+--- a/librecomp/src/files.cpp
++++ b/librecomp/src/files.cpp
+@@ -36,6 +36,19 @@ bool recomp::finalize_output_file_with_backup(const std::filesystem::path& filep
+     temp_path += temp_suffix;
+ 
+     std::error_code ec;
++#ifdef __SWITCH__
++    // libstdc++'s copy_file ends with fchmod, which libnx's SD driver rejects (ENOSYS), so every
++    // copy fails. Rotate with renames instead; FAT renames refuse an existing target, hence the removes.
++    std::filesystem::remove(backup_path, ec);
++    if (std::filesystem::exists(filepath, ec)) {
++        std::filesystem::rename(filepath, backup_path, ec);
++        if (ec) {
++            return false;
++        }
++    }
++    std::filesystem::rename(temp_path, filepath, ec);
++    return !ec;
++#else
+     if (std::filesystem::exists(filepath, ec)) {
+         std::filesystem::copy_file(filepath, backup_path, std::filesystem::copy_options::overwrite_existing, ec);
+         if (ec) {
+@@ -48,4 +61,5 @@ bool recomp::finalize_output_file_with_backup(const std::filesystem::path& filep
+     }
+     std::filesystem::remove(temp_path, ec);
+     return true;
++#endif
+ }
+diff --git a/librecomp/src/pak.cpp b/librecomp/src/pak.cpp
+index d826cde..d5aa57b 100644
+--- a/librecomp/src/pak.cpp
++++ b/librecomp/src/pak.cpp
+@@ -4,6 +4,8 @@
+ #include "recomp.h"
+ #include "helpers.hpp"
+ 
++extern "C" void nx_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
++
+ void save_write(RDRAM_ARG PTR(void) rdram_address, uint32_t offset, uint32_t count);
+ void save_read(RDRAM_ARG PTR(void) rdram_address, uint32_t offset, uint32_t count);
+ 
+@@ -67,6 +69,13 @@ extern "C" void osPfsReadWriteFile_recomp(uint8_t * rdram, recomp_context * ctx)
+ 
+     assert(file_no == 0);
+ 
++    static unsigned n = 0;
++    const unsigned i = ++n;
++    if (i <= 4 || (i % 30) == 0) {
++        nx_log("osPfsReadWriteFile #%u flag=%u offset=%d size=%d", i, static_cast<unsigned>(flag),
++               offset, size_in_bytes);
++    }
++
+     if (flag == 0) {
+         save_read(rdram, data, offset, size_in_bytes);
+     } else if (flag == 1) {
+diff --git a/librecomp/src/pi.cpp b/librecomp/src/pi.cpp
+index 62656ad..3d955a7 100644
+--- a/librecomp/src/pi.cpp
++++ b/librecomp/src/pi.cpp
+@@ -11,6 +11,8 @@
+ #include <ultramodern/ultra64.h>
+ #include <ultramodern/ultramodern.hpp>
+ 
++extern "C" void nx_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
++
+ static std::vector<uint8_t> rom;
+ 
+ bool recomp::is_rom_loaded() {
+@@ -130,6 +132,8 @@ void update_save_file() {
+     }
+     if (saving_failed) {
+         ultramodern::error_handling::message_box("Failed to write to the save file. Check your file permissions and whether the save folder has been moved to Dropbox or similar, as this can cause issues.");
++    } else {
++        nx_log("save wrote %s", ultramodern::get_save_file_path().string().c_str());
+     }
+ }
+ 
+@@ -160,6 +164,8 @@ void saving_thread_func(RDRAM_ARG1) {
+             save_context.swap_file_ready_sempahore.signal();
+         }
+     }
++    // Drain a last save_write that raced with exited (HOME / SDL_QUIT).
++    update_save_file();
+ }
+ 
+ void save_write_ptr(const void* in, uint32_t offset, uint32_t count) {
+@@ -233,10 +239,17 @@ void read_save_file() {
+     std::ifstream save_file = recomp::open_input_file_with_backup(save_file_path, std::ios_base::binary);
+     if (save_file.good()) {
+         save_file.read(save_context.save_buffer.data(), save_context.save_buffer.size());
++        std::error_code exists_ec;
++        if (std::filesystem::exists(save_file_path, exists_ec)) {
++            nx_log("save loaded %s", save_file_path.string().c_str());
++        } else {
++            nx_log("save loaded %s.bak", save_file_path.string().c_str());
++        }
+     }
+     else {
+         // Otherwise clear the save file to all zeroes.
+         std::fill(save_context.save_buffer.begin(), save_context.save_buffer.end(), 0);
++        nx_log("save empty (zeros) path=%s", save_file_path.string().c_str());
+     }
+ }
+ 
+@@ -245,6 +258,9 @@ void ultramodern::init_saving(RDRAM_ARG1) {
+ 
+     save_context.save_buffer.resize(get_save_size(recomp::get_save_type()));
+ 
++    nx_log("save init path=%s size=%zu", ultramodern::get_save_file_path().string().c_str(),
++           save_context.save_buffer.size());
++
+     read_save_file();
+ 
+     save_context.saving_thread = std::thread{saving_thread_func, PASS_RDRAM};
+diff --git a/ultramodern/src/error_handling.cpp b/ultramodern/src/error_handling.cpp
+index 8ca779e..57aa43f 100644
+--- a/ultramodern/src/error_handling.cpp
++++ b/ultramodern/src/error_handling.cpp
+@@ -1,4 +1,5 @@
+ #include <cstdio>
++#include <cstdlib>
+ 
+ #include "ultramodern/error_handling.hpp"
+ 
+@@ -21,7 +22,7 @@ void ultramodern::error_handling::message_box(const char* msg) {
+ void ultramodern::error_handling::quick_exit(const char* filename, int line, const char *func, int exit_status) {
+     fprintf(stderr, "Exiting with exit status '%i'. Function %s, at file %s:%i\n", exit_status, func, filename, line);
+ 
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(__SWITCH__)
+     std::_Exit(exit_status);
+ #else
+     std::quick_exit(exit_status);
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index 1cd7907..a24fb26 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -133,6 +133,17 @@ static struct {
+     moodycamel::ConcurrentQueue<OSThread*> deleted_threads{};
+ } events_context{};
+ 
++// GLideN64 presents on the gfx thread and blocks on vsync. Screen updates then
++// pile up behind a slow ProcessDList (shader compile) and starve later gfx
++// tasks — DK64-NX "freeze on the Nintendo logo". Drop a screen update when a
++// newer one is already queued; always present the latest.
++static std::atomic_int pending_screen_updates{0};
++
++extern "C" void nx_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
++#ifdef __SWITCH__
++extern "C" bool goemon64nx_wait_vsync();
++#endif
++
+ ultramodern::renderer::ViRegs* ultramodern::renderer::get_vi_regs() {
+     return &events_context.vi.update_screen_regs;
+ }
+@@ -200,7 +211,13 @@ void vi_thread_func() {
+             // printf("Skipping the next VI wait\n");
+             next = std::chrono::high_resolution_clock::now();
+         }
++#ifdef __SWITCH__
++        if (!goemon64nx_wait_vsync()) {
++            ultramodern::sleep_until(next);
++        }
++#else
+         ultramodern::sleep_until(next);
++#endif
+         auto time_now = ultramodern::time_since_start();
+         // Calculate how many VIs have passed
+         uint64_t new_total_vis = (time_now * (60 * ultramodern::get_speed_multiplier()) / 1000ms) + 1;
+@@ -218,6 +235,7 @@ void vi_thread_func() {
+ 
+         // Queue a screen update for the graphics thread with the current VI register state.
+         // Doing this before the VI update is equivalent to updating the screen after the previous frame's scanout finished.
++        pending_screen_updates.fetch_add(1);
+         events_context.action_queue.enqueue(ScreenUpdateAction{ events_context.vi.regs });
+ 
+         // Update VI registers and swap VI modes.
+@@ -380,6 +398,16 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+             }
+             else if (const auto* screen_update_action = std::get_if<ScreenUpdateAction>(&action)) {
+                 events_context.vi.update_screen_regs = screen_update_action->regs;
++                // fetch_sub returns the previous count. >1 means a newer update is
++                // already queued — skip the present so gfx tasks can drain.
++                if (pending_screen_updates.fetch_sub(1) > 1) {
++                    static bool logged_skip = false;
++                    if (!logged_skip) {
++                        logged_skip = true;
++                        nx_log("gfx queue: coalescing stale screen updates");
++                    }
++                    continue;
++                }
+                 renderer_context->update_screen();
+                 display_refresh_rate = renderer_context->get_display_framerate();
+                 resolution_scale = renderer_context->get_resolution_scale();

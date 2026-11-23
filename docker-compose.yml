@@ -1,0 +1,31 @@
+# Bind-mount this repo at /work. The Artix host is typically a private udisks
+# mount under /run/media: use a plain bind. Do not set bind-propagation: rslave
+# (Docker rejects it: "not a shared or slave mount"). Do not add :z unless the
+# host is SELinux Enforcing.
+#
+# switch-sdk: root inside the container (needs /opt/devkitpro); the entrypoint
+#   chowns /work/build back to HOST_UID:HOST_GID.
+#
+# nxlink: scripts/nxlink.sh → docker run --network host (not compose run --network).
+
+name: goemon64recomp-nx
+
+services:
+  switch-sdk:
+    image: goemon64recomp-nx-switch-sdk:20260219
+    build:
+      context: docker
+      dockerfile: switch-sdk.Dockerfile
+    working_dir: /work
+    environment:
+      GOEMON64_IN_CONTAINER: "1"
+      GOEMON64_SWITCH_SDK: "1"
+      DEVKITPRO: /opt/devkitpro
+      HOST_UID: "${UID:-1000}"
+      HOST_GID: "${GID:-1000}"
+    volumes:
+      - type: bind
+        source: .
+        target: /work
+    stdin_open: true
+    tty: true

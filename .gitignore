@@ -1,0 +1,94 @@
+# Legal / copyright — never publish these
+# (Konami game data, official art, Nintendo keys/firmware, extracted assets)
+
+# Cartridge dumps (any endianness / container) and decompressed codegen images.
+# RecompiledFuncs/ and RecompiledPatches/ stay tracked: they are generated C, not the .z64.
+*.z64
+*.n64
+*.v64
+*.rom
+mnsg.z64
+mnsg.us.z64
+mnsg.us.decompressed.z64
+*decompressed*.z64
+
+# Official marketing / box art (not Switch captures in docs/)
+Capa.webp
+Capa.*
+*boxart*
+*cover-art*
+
+# Assets extracted from the ROM (texture packs, audio rips). Root-only audio
+# so third-party samples under lib/ are not ignored.
+*.htc
+*.hts
+*.pak
+/*.wav
+/*.mp3
+/*.ogg
+
+# Patched ROM payloads if dropped next to a dump
+/*.ips
+/*.bps
+/*.ups
+
+# Nintendo keys, firmware, and console dumps (sharing these is illegal)
+prod.keys
+title.keys
+console.keys
+*.keys
+BOOT0
+BOOT1
+pkg1
+pkg2
+fuse.bin
+*.nsp
+*.xci
+*.nsz
+*.ncz
+pifrom*
+IPL.bin
+
+# User data and caches derived from the game
+saves/
+*.eep
+*.sra
+*.fla
+*.mpk
+mnsg.us.bin
+shaders/
+nx_options.txt
+imgui.ini
+
+# Generic secrets
+.env
+.env.*
+credentials.json
+*.pem
+id_rsa
+id_ed25519
+
+# Internal Cursor plans — not for a public repo
+.cursor/
+
+# Build noise (DK64-style, without ignoring RecompiledFuncs / RecompiledPatches)
+/build/
+/sdmc-staging/
+/logs/
+*.nro
+*.nacp
+*.o
+*.elf
+compile_commands.json
+
+# Host recompiler binaries
+N64Recomp
+RSPRecomp
+
+# Editor / OS
+.DS_Store
+.cache/
+.idea/
+.vscode/
+*~
+*.swp

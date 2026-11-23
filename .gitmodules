@@ -1,0 +1,10 @@
+[submodule "lib/N64ModernRuntime"]
+	path = lib/N64ModernRuntime
+	url = https://github.com/klorfmorf/N64ModernRuntime.git
+	branch = goemon-patches
+[submodule "lib/GLideN64"]
+	path = lib/GLideN64
+	url = https://github.com/gonetz/GLideN64.git
+[submodule "lib/imgui"]
+	path = lib/imgui
+	url = https://github.com/ocornut/imgui.git
