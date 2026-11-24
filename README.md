@@ -160,6 +160,18 @@ internal resolution apply on the next start (Restart in the menu, or HOME and re
 
 The game runs at its original **30 fps**. There is no 60 fps interpolation.
 
+## Backlog
+
+Planned work, in no particular order:
+
+- Implement true widescreen
+- On first launch, widescreen should be off by default
+- Standardize A as jump and Y as attack
+- Allow controller remapping
+- Fix crash on reset
+- Implement true 60 fps
+- Optional: right analog stick moves the camera
+
 ## Building
 
 Requirements on the host: **git**, **Docker** (and Compose). Nothing from devkitPro is
