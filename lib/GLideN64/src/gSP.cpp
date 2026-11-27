@@ -176,6 +176,8 @@ void gSPMatrix( u32 matrix, u8 param )
 		return;
 	}
 
+	RT64EX_OnMatrix(address, param, mtx);
+
 	if (param & G_MTX_PROJECTION) {
 		if (param & G_MTX_LOAD)
 			CopyMatrix( gSP.matrix.projection, mtx );
@@ -1315,6 +1317,8 @@ void gSPVertex(u32 a, u32 n, u32 v0)
 		return;
 	}
 
+	RT64EX_OnVertices(address, n * sizeof(Vertex));
+
 	if ((gSP.geometryMode & G_LIGHTING) != 0) {
 
 		if ((gSP.changed & CHANGED_LIGHT) != 0)
@@ -1752,7 +1756,7 @@ void gSPBranchLessZ(u32 branchdl, u32 vtx, u32 zval)
 
 	SPVertex & v = dwnd().getDrawer().getVertex(vtx);
 	const u32 zTest = u32((v.z / v.w) * 1023.0f);
-	if (zTest > 0x03FF || zTest <= zval)
+	if (RT64EX_OnDecision(zTest > 0x03FF || zTest <= zval))
 		RSP.PC[RSP.PCi] = address;
 
 	DebugMsg(DEBUG_NORMAL, "gSPBranchLessZ( 0x%08X, %i, %i );\n", branchdl, vtx, zval );
@@ -1769,7 +1773,7 @@ void gSPBranchLessW( u32 branchdl, u32 vtx, u32 wval )
 	}
 
 	SPVertex & v = dwnd().getDrawer().getVertex(vtx);
-	if (v.w < (float)wval)
+	if (RT64EX_OnDecision(v.w < (float)wval))
 		RSP.PC[RSP.PCi] = address;
 
 	DebugMsg(DEBUG_NORMAL, "gSPBranchLessZ( 0x%08X, %i, %i );\n", branchdl, vtx, wval);
@@ -1907,7 +1911,7 @@ bool gSPCullVertices( u32 v0, u32 vn )
 
 void gSPCullDisplayList( u32 v0, u32 vn )
 {
-	if (gSPCullVertices( v0, vn )) {
+	if (RT64EX_OnDecision(gSPCullVertices( v0, vn ))) {
 		if (RSP.PCi > 0)
 			RSP.PCi--;
 		else {

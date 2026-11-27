@@ -30,7 +30,15 @@ const nx::SettingInfo SETTINGS[COUNT] = {
     {"Display", "resolution", "Resolution",
      "Internal resolution. 2x is lighter on the console, 3x fills the height of the 720p screen.", 0,
      {"2x (640x480)", "3x (960x720)"}, 0, 0, 0, true},
-    {"Overlays", "show_fps", "Show FPS", "Frames shown per second, in the top left corner.", 0, OFF_ON},
+    {"Display", "frame_rate", "Frame Rate",
+     "60 interpolates an extra picture between the original 30 game ticks. 30 is the original rate, "
+     "one picture per tick. Applies immediately. Heavy scenes drop the extra picture instead of hitching.",
+     1, {"30", "60"}},
+    {"Overlays", "show_fps", "Show FPS",
+     "Presents per second (screen swaps), not game ticks, in the top left. At Frame Rate 60, also "
+     "shows pass 1 and pass 2 times (pass 2 at 0 means the extra picture was dropped) and last-second "
+     "hold / wait / drop counts for the interpolated present.",
+     0, OFF_ON},
     {"Audio", "master_volume", "Master Volume", "Volume of everything the game plays, music and sound effects.",
      100, {}, 0, 100, 5, false, "%"},
     {"Audio", "music_volume", "Music Volume", "Background music volume.", 100, {}, 0, 100, 5, false, "%"},

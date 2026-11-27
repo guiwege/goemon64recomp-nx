@@ -233,6 +233,11 @@ RECOMP_PATCH s32 func_80016C44_17844(Object *object)
             return 1;
 
         case 0x20000000:
+            // @recomp Tag the camera projection stack so frustum / look-at / object
+            // mtx pair by id (SkipAll above is MODELVIEW only).
+            if (!skip_interpolation) {
+                gEXMatrixGroupSimpleNormal(D_8015C5CC_15D1CC++, (u32)object, G_EX_PUSH, G_MTX_PROJECTION, G_EX_EDIT_ALLOW);
+            }
             // @recomp Fix the scissor so that RT64 can render in widescreen.
             if (recomp_get_target_aspect_ratio(original_aspect_ratio) != original_aspect_ratio) {
                 memcpy(&g_widescreen_camera, (Camera *)aptr, sizeof(Camera));
@@ -275,6 +280,9 @@ RECOMP_PATCH s32 func_80016C44_17844(Object *object)
             
             D_801684F0_1690F0 = aptr;
             func_8001B6D4_1C2D4(camera);
+            if (!skip_interpolation) {
+                gEXPopMatrixGroup(D_8015C5CC_15D1CC++, G_MTX_PROJECTION);
+            }
             return 1;
 
         case 0x30000000:

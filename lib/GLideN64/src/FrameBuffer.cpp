@@ -52,6 +52,11 @@ FrameBuffer::~FrameBuffer()
 	gfxContext.deleteFramebuffer(m_SubFBO);
 	if (m_copyFBO != ObjectHandle::defaultFramebuffer)
 		gfxContext.deleteFramebuffer(m_copyFBO);
+	for (u32 i = 0; i < 2; ++i) {
+		if (m_interpFBO[i] != ObjectHandle::defaultFramebuffer)
+			gfxContext.deleteFramebuffer(m_interpFBO[i]);
+		textureCache().removeFrameBufferTexture(m_pInterpTexture[i]);
+	}
 
 	textureCache().removeFrameBufferTexture(m_pTexture);
 	textureCache().removeFrameBufferTexture(m_pDepthTexture);
@@ -434,6 +439,35 @@ void FrameBuffer::_initCopyTexture()
 	_setAndAttachTexture(m_copyFBO, m_pFrameBufferCopyTexture, 0, config.video.multisampling != 0);
 	if (config.video.multisampling != 0)
 		m_pFrameBufferCopyTexture->frameBufferTexture = CachedTexture::fbMultiSample;
+}
+
+void FrameBuffer::interpCopy(u32 _slot, bool _save)
+{
+	if (m_pInterpTexture[_slot] == nullptr) {
+		m_interpFBO[_slot] = gfxContext.createFramebuffer();
+		m_pInterpTexture[_slot] = textureCache().addFrameBufferTexture(textureTarget::TEXTURE_2D);
+		_initTexture(static_cast<u16>(m_width), VI_GetMaxBufferHeight(static_cast<u16>(m_width)),
+					 m_pTexture->format, m_pTexture->size, m_pInterpTexture[_slot]);
+		_setAndAttachTexture(m_interpFBO[_slot], m_pInterpTexture[_slot], 0, false);
+	}
+
+	Context::BlitFramebuffersParams blitParams;
+	blitParams.readBuffer = _save ? m_FBO : m_interpFBO[_slot];
+	blitParams.drawBuffer = _save ? m_interpFBO[_slot] : m_FBO;
+	blitParams.srcX0 = 0;
+	blitParams.srcY0 = 0;
+	blitParams.srcX1 = m_pTexture->width;
+	blitParams.srcY1 = m_pTexture->height;
+	blitParams.dstX0 = 0;
+	blitParams.dstY0 = 0;
+	blitParams.dstX1 = m_pTexture->width;
+	blitParams.dstY1 = m_pTexture->height;
+	blitParams.mask = blitMask::COLOR_BUFFER;
+	blitParams.filter = textureParameters::FILTER_NEAREST;
+	gfxContext.blitFramebuffers(blitParams);
+
+	gfxContext.bindFramebuffer(bufferTarget::READ_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);
+	frameBufferList().setCurrentDrawBuffer();
 }
 
 CachedTexture * FrameBuffer::_copyFrameBufferTexture()

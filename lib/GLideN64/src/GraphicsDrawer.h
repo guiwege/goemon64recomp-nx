@@ -213,6 +213,7 @@ private:
 	void _updateStates(DrawingState _drawingState) const;
 	void _prepareDrawTriangle(DrawingState _drawingState);
 	bool _canDraw() const;
+	bool _maxYKnown() const;
 	void _drawThickLine(u32 _v0, u32 _v1, float _width, u32 _flag);
 
 	void _drawOSD(const char *_pText, float _x, float & _y);

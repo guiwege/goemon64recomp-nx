@@ -846,6 +846,19 @@ void GraphicsDrawer::_prepareDrawTriangle(DrawingState _drawingState)
 	m_modifyVertices = 0;
 }
 
+// renderTriangles walks every triangle on the CPU only to find how far down the frame buffer was drawn
+// (setBufferChanged grows the buffer's height with it) and, with a software depth copy, to rasterise depth. A main
+// buffer's height is clamped to the VI height and never shrinks, so once it is there the walk changes nothing.
+bool GraphicsDrawer::_maxYKnown() const
+{
+	if (!g_goemon64nxSkipKnownMaxY)
+		return false;
+	if (config.frameBufferEmulation.copyDepthToRDRAM == Config::cdSoftwareRender && gDP.otherMode.depthUpdate != 0)
+		return false;
+	const FrameBuffer * pCurrent = frameBufferList().getCurrent();
+	return pCurrent != nullptr && pCurrent->m_isMainBuffer && pCurrent->m_height >= VI.height;
+}
+
 bool GraphicsDrawer::_canDraw() const
 {
 	return config.frameBufferEmulation.enable == 0 || frameBufferList().getCurrent() != nullptr;
@@ -877,7 +890,7 @@ void GraphicsDrawer::drawTriangles()
 			maxY = renderAndDrawTriangles(triangles.vertices.data(), triangles.elements.data(), triangles.num, m_bFlatColors, m_statistics);
 		} else {
 			gfxContext.drawTriangles(triParams);
-			maxY = renderTriangles(triangles.vertices.data(), triangles.elements.data(), triangles.num);
+			maxY = _maxYKnown() ? 0.0f : renderTriangles(triangles.vertices.data(), triangles.elements.data(), triangles.num);
 		}
 		frameBufferList().setBufferChanged(maxY);
 		if (config.frameBufferEmulation.copyDepthToRDRAM == Config::cdSoftwareRender &&
@@ -975,7 +988,7 @@ void GraphicsDrawer::drawDMATriangles(u32 _numVtx)
 		}
 		else {
 			gfxContext.drawTriangles(triParams);
-			maxY = renderTriangles(m_dmaVertices.data(), nullptr, _numVtx);
+			maxY = _maxYKnown() ? 0.0f : renderTriangles(m_dmaVertices.data(), nullptr, _numVtx);
 		}
 		frameBufferList().setBufferChanged(maxY);
 		if (config.frameBufferEmulation.copyDepthToRDRAM == Config::cdSoftwareRender &&
