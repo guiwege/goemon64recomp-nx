@@ -146,19 +146,21 @@ Close sit on the top bar. Restart is enabled when the homebrew loader supports
 `envSetNextLoad` (title override from the Homebrew Menu does). The game keeps running
 (audio included); only the pad is held.
 
-Volumes, camera, targeting, rumble, and the clock profile apply at once. Aspect ratio and
+Volumes, camera, targeting, rumble, clock profile, and frame rate apply at once. Aspect ratio and
 internal resolution apply on the next start (Restart in the menu, or HOME and relaunch).
 
 | Section | What you'll find there |
 |---|---|
-| **Display** | **16:9** (default, fills the screen) or **4:3**; internal resolution **2×** (640×480, default) or **3×** (960×720) |
-| **Overlays** | Show FPS |
+| **Display** | **16:9** (default, fills the screen) or **4:3**; internal resolution **2×** (640×480, default) or **3×** (960×720); **Frame Rate** **60** (interpolated, default) or **30** (original) |
+| **Overlays** | Show FPS (presents per second, not game ticks; at 60 also shows pass 1 / pass 2 times) |
 | **Audio** | Master, music, and sound-effect volumes |
 | **Performance** | Clock profile: Console Default, Docked GPU in Handheld (768 MHz GPU, the default), Horizon OC Docked Clocks, CPU Boost (1785 MHz, needs [Horizon OC](https://github.com/Horizon-OC/Horizon-OC)) |
 | **Controls** | Targeting mode, camera invert, analog camera, rumble, Face Buttons |
 | **Menu** | Orange or gray theme, opacity, size |
 
-The game runs at its original **30 fps**. There is no 60 fps interpolation.
+The game still ticks at its original **30 fps**. **Frame Rate 60** (the default) interpolates an
+extra picture between ticks so motion looks like 60; **30** is the original rate, one picture
+per tick. Heavy scenes may drop the extra picture (overlay pass 2 at 0) instead of hitching.
 
 ## Backlog
 
@@ -169,7 +171,6 @@ Planned work, in no particular order:
 - Standardize A as jump and Y as attack
 - Allow controller remapping
 - Fix crash on reset
-- Implement true 60 fps
 - Optional: right analog stick moves the camera
 
 ## Building

@@ -90,6 +90,12 @@ struct FrameBuffer
 	graphics::ObjectHandle m_copyFBO;
 	CachedTexture * m_pFrameBufferCopyTexture = nullptr;
 
+	// Frame interpolation (switch/gliden64_rt64ex.cpp): copies the color buffer to (_save) or from
+	// one of two saved slots, the real frame and the in-between one.
+	void interpCopy(u32 _slot, bool _save);
+	graphics::ObjectHandle m_interpFBO[2];
+	CachedTexture * m_pInterpTexture[2] = {nullptr, nullptr};
+
 	std::vector<u8> m_RdramCopy;
 
 private:

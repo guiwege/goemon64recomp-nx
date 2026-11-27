@@ -9,6 +9,7 @@
 #include "librecomp/addresses.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cinttypes>
 #include <cstring>
 
@@ -16,6 +17,26 @@
 
 extern "C" uint32_t goemon64nx_take_dl_command_count();
 extern "C" void goemon64nx_log_texcache();
+extern "C" void goemon64nx_interp_frame_begin();
+extern "C" void goemon64nx_rt64ex_save_state();
+extern "C" void goemon64nx_rt64ex_restore_state();
+extern "C" bool goemon64nx_interp_begin_second_pass(uint32_t first_pass_us, bool wanted);
+extern "C" void goemon64nx_interp_end_second_pass();
+extern "C" bool goemon64nx_interp_present_in_between(uint32_t origin);
+extern "C" void goemon64nx_interp_present_done();
+extern "C" bool goemon64nx_front_buffer_redrawn(uint32_t origin);
+extern "C" void goemon64nx_interp_pass2_done(uint32_t us);
+// Strong definition: n64modernruntime.patch (vi-queue). Weak stub returns false.
+extern "C" bool goemon64nx_claim_screen_update();
+
+// Last display list's pass times in microseconds (pass 2 is 0 when the in-between
+// was dropped). The FPS overlay reads these.
+std::atomic<uint32_t> goemon64nx_pass1_us{0};
+std::atomic<uint32_t> goemon64nx_pass2_us{0};
+// Lifetime totals; the overlay shows last-second deltas while interpolating.
+std::atomic<uint32_t> goemon64nx_interp_holds{0};
+std::atomic<uint32_t> goemon64nx_interp_waits{0};
+std::atomic<uint32_t> goemon64nx_interp_dropped{0};
 
 #define M64P_PLUGIN_PROTOTYPES 1
 #include "m64p_common.h"
@@ -258,10 +279,37 @@ void GLideN64Context::send_dl(const OSTask *task) {
         }
     }
 
+    using Clock = std::chrono::steady_clock;
+    const auto pass1_start = Clock::now();
+    goemon64nx_interp_frame_begin();
+    goemon64nx_rt64ex_save_state();
     ProcessDList();
+    const uint32_t pass1_us = static_cast<uint32_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - pass1_start).count());
+    goemon64nx_pass1_us.store(pass1_us, std::memory_order_relaxed);
+    goemon64nx_pass2_us.store(0, std::memory_order_relaxed);
+
     const uint32_t cmds = goemon64nx_take_dl_command_count();
     if (n == 1) {
-        nx_log("ProcessDList #1 cmds=%u", cmds);
+        nx_log("ProcessDList #1 cmds=%u pass1_us=%u", cmds, pass1_us);
+    }
+
+    if (goemon64nx_interp_begin_second_pass(pass1_us, nx::interpolating())) {
+        // One or more VIs may have queued a present during pass 1. Show the
+        // latest now; claim skips every queued update it covered so the
+        // in-between and the real frame are not swapped in the same vblank.
+        if (goemon64nx_claim_screen_update()) {
+            update_screen();
+        }
+        const auto pass2_start = Clock::now();
+        goemon64nx_rt64ex_restore_state();
+        sp_status_reg = 0x0203;
+        ProcessDList();
+        goemon64nx_interp_end_second_pass();
+        const uint32_t pass2_us = static_cast<uint32_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - pass2_start).count());
+        goemon64nx_pass2_us.store(pass2_us, std::memory_order_relaxed);
+        goemon64nx_interp_pass2_done(pass2_us);
     }
 }
 
@@ -271,9 +319,9 @@ void GLideN64Context::update_screen() {
     }
 
     const uint32_t n = ++g_update_screen_count;
+    const ultramodern::renderer::ViRegs *regs = ultramodern::renderer::get_vi_regs();
+    const unsigned origin = regs != nullptr ? regs->VI_ORIGIN_REG : 0;
     if (should_log_count(n)) {
-        const ultramodern::renderer::ViRegs *regs = ultramodern::renderer::get_vi_regs();
-        const unsigned origin = regs != nullptr ? regs->VI_ORIGIN_REG : 0;
         const unsigned width = regs != nullptr ? regs->VI_WIDTH_REG : 0;
         const unsigned status = regs != nullptr ? regs->VI_STATUS_REG : 0;
         const unsigned hstart = regs != nullptr ? regs->VI_H_START_REG : 0;
@@ -288,9 +336,32 @@ void GLideN64Context::update_screen() {
         }
     }
 
-    UpdateScreen();
-    if (should_log_count(n)) {
-        goemon64nx_log_texcache();
+    // Goemon starts frame N+2 in the buffer still on screen and relies on the RDP
+    // freeze (not emulated) to hold it back, so re-presenting that buffer would
+    // show N+2 before N+1: back-and-forth jitter in motion. Keep the image on
+    // screen instead; the VI moves to the other buffer next. Bounded so a
+    // single-buffered scene still refreshes.
+    if (goemon64nx_interp_present_in_between(origin)) {
+        UpdateScreen();
+        goemon64nx_interp_present_done();
+        held_presents_ = 0;
+        presented_origin_ = origin;
+        if (should_log_count(n)) {
+            goemon64nx_log_texcache();
+        }
+        return;
+    }
+    if (origin == presented_origin_ && held_presents_ < MAX_HELD_PRESENTS &&
+        goemon64nx_front_buffer_redrawn(origin)) {
+        held_presents_++;
+        goemon64nx_interp_holds.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        held_presents_ = 0;
+        presented_origin_ = origin;
+        UpdateScreen();
+        if (should_log_count(n)) {
+            goemon64nx_log_texcache();
+        }
     }
 }
 

@@ -31,6 +31,11 @@ private:
     bool developer_mode_ = false;
     bool valid_ = false;
     bool plugin_started_ = false;
+    // 3 held VIs max, so single-buffered scenes drop to 15 Hz at worst; a real
+    // RDP freeze would avoid it.
+    static constexpr uint32_t MAX_HELD_PRESENTS = 3;
+    uint32_t presented_origin_ = 0;
+    uint32_t held_presents_ = 0;
 };
 
 } // namespace goemon64nx

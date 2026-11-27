@@ -5,7 +5,10 @@
 #   error_handling.cpp: std::_Exit on __SWITCH__ (no std::quick_exit)
 #   events.cpp: coalesce stale ScreenUpdateActions so GLideN64 vsync present
 #               cannot starve display lists (DK64-NX "freeze on the Nintendo logo");
-#               VI thread waits on display vsync (goemon64nx_wait_vsync) on Switch
+#               VI thread waits on display vsync (goemon64nx_wait_vsync) on Switch;
+#               claim_screen_update presents the latest pending VI between
+#               interpolation passes and skips every queued ScreenUpdate it
+#               covered; on Switch enqueue ScreenUpdate after update_vi
 #   files.cpp: Switch save rotation via rename+remove (libstdc++ copy_file
 #              ends in fchmod, which the libnx SD driver rejects with ENOSYS)
 #   pi.cpp: save init/read/write logs; flush save on saving-thread exit
@@ -147,10 +150,10 @@ index 8ca779e..57aa43f 100644
  #else
      std::quick_exit(exit_status);
 diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
-index 1cd7907..a24fb26 100644
+index 1cd7907..5dd5e09 100644
 --- a/ultramodern/src/events.cpp
 +++ b/ultramodern/src/events.cpp
-@@ -133,6 +133,17 @@ static struct {
+@@ -133,6 +133,46 @@ static struct {
      moodycamel::ConcurrentQueue<OSThread*> deleted_threads{};
  } events_context{};
  
@@ -163,12 +166,41 @@ index 1cd7907..a24fb26 100644
 +extern "C" void nx_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 +#ifdef __SWITCH__
 +extern "C" bool goemon64nx_wait_vsync();
++
++// A 60 fps display list is drawn twice (switch/renderer/gliden64_context.cpp).
++// When the two passes outlast a VI, the screen updates of the VIs that went by
++// waited behind them and were presented back to back once both passes were done:
++// the display shows the last image presented before its vblank, so the first of
++// the two was never seen. Between the passes the renderer presents the latest
++// due update (goemon64nx_claim_screen_update); every queued action it stood for
++// is then skipped so a second present cannot land in the same vblank.
++static std::mutex latest_screen_regs_mutex;
++static ultramodern::renderer::ViRegs latest_screen_regs;
++static std::atomic_int screen_updates_presented_early{0};
++
++extern "C" bool goemon64nx_claim_screen_update() {
++    const int presented_early = screen_updates_presented_early.load();
++    const int pending = pending_screen_updates.load();
++    const int unclaimed = pending - presented_early;
++    if (unclaimed <= 0) {
++        return false;
++    }
++    {
++        std::lock_guard lock{latest_screen_regs_mutex};
++        events_context.vi.update_screen_regs = latest_screen_regs;
++    }
++    // Pass 1 can outlast more than one VI. Present latest only and skip every
++    // queued ScreenUpdate this claim covered, so a later action cannot present
++    // the real FBO in the same interval as the in-between.
++    screen_updates_presented_early.fetch_add(unclaimed);
++    return true;
++}
 +#endif
 +
  ultramodern::renderer::ViRegs* ultramodern::renderer::get_vi_regs() {
      return &events_context.vi.update_screen_regs;
  }
-@@ -200,7 +211,13 @@ void vi_thread_func() {
+@@ -200,7 +240,13 @@ void vi_thread_func() {
              // printf("Skipping the next VI wait\n");
              next = std::chrono::high_resolution_clock::now();
          }
@@ -182,18 +214,48 @@ index 1cd7907..a24fb26 100644
          auto time_now = ultramodern::time_since_start();
          // Calculate how many VIs have passed
          uint64_t new_total_vis = (time_now * (60 * ultramodern::get_speed_multiplier()) / 1000ms) + 1;
-@@ -218,6 +235,7 @@ void vi_thread_func() {
+@@ -216,12 +262,28 @@ void vi_thread_func() {
+             odd = !odd;
+         }
  
++#ifdef __SWITCH__
++        // Switch: the screen update carries the registers of this VI (the buffer
++        // the N64 shows until the next one), queued before the display list the
++        // game builds after this retrace. Queued before the VI update, it showed
++        // each buffer one VI late, and at 60 fps the real image of each frame was
++        // lost or its in-between came too early.
++        events_context.vi.update_vi();
++        {
++            std::lock_guard lock{latest_screen_regs_mutex};
++            latest_screen_regs = events_context.vi.regs;
++        }
++        pending_screen_updates.fetch_add(1);
++        events_context.action_queue.enqueue(ScreenUpdateAction{ events_context.vi.regs });
++#else
          // Queue a screen update for the graphics thread with the current VI register state.
          // Doing this before the VI update is equivalent to updating the screen after the previous frame's scanout finished.
 +        pending_screen_updates.fetch_add(1);
          events_context.action_queue.enqueue(ScreenUpdateAction{ events_context.vi.regs });
  
          // Update VI registers and swap VI modes.
-@@ -380,6 +398,16 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+         events_context.vi.update_vi();
++#endif
+ 
+         // If the game has started, handle sending VI and AI events.
+         if (ultramodern::is_game_started()) {
+@@ -380,6 +442,25 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
              }
              else if (const auto* screen_update_action = std::get_if<ScreenUpdateAction>(&action)) {
                  events_context.vi.update_screen_regs = screen_update_action->regs;
++#ifdef __SWITCH__
++                // Mid-present already showed latest between interpolation
++                // passes; skip every queued action the claim covered.
++                if (screen_updates_presented_early.load() > 0) {
++                    screen_updates_presented_early.fetch_sub(1);
++                    pending_screen_updates.fetch_sub(1);
++                    continue;
++                }
++#endif
 +                // fetch_sub returns the previous count. >1 means a newer update is
 +                // already queued — skip the present so gfx tasks can drain.
 +                if (pending_screen_updates.fetch_sub(1) > 1) {

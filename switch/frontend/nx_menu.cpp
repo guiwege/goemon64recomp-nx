@@ -36,6 +36,15 @@
 
 const char *goemon64nx_program_path = nullptr;
 
+// Last display list's pass times in microseconds (defined in gliden64_context.cpp).
+// Pass 2 is 0 when the in-between was dropped. Hold / wait / drop are lifetime
+// totals; count_frame turns them into last-second rates for the overlay.
+extern std::atomic<uint32_t> goemon64nx_pass1_us;
+extern std::atomic<uint32_t> goemon64nx_pass2_us;
+extern std::atomic<uint32_t> goemon64nx_interp_holds;
+extern std::atomic<uint32_t> goemon64nx_interp_waits;
+extern std::atomic<uint32_t> goemon64nx_interp_dropped;
+
 namespace {
 
 using nx::Setting;
@@ -105,6 +114,12 @@ uint64_t last_frame_ms = 0;
 int fps = 0;
 int frames_counted = 0;
 uint64_t fps_window_start_ms = 0;
+int holds_per_second = 0;
+int waits_per_second = 0;
+int dropped_per_second = 0;
+uint32_t holds_window_start = 0;
+uint32_t waits_window_start = 0;
+uint32_t dropped_window_start = 0;
 
 const Theme &look() {
     return nx::menu::theme(nx::get(Setting::MenuTheme));
@@ -569,6 +584,15 @@ void count_frame(uint64_t now) {
         fps = static_cast<int>(frames_counted * 1000 / (now - fps_window_start_ms));
         frames_counted = 0;
         fps_window_start_ms = now;
+        const uint32_t holds = goemon64nx_interp_holds.load(std::memory_order_relaxed);
+        const uint32_t waits = goemon64nx_interp_waits.load(std::memory_order_relaxed);
+        const uint32_t dropped = goemon64nx_interp_dropped.load(std::memory_order_relaxed);
+        holds_per_second = static_cast<int>(holds - holds_window_start);
+        waits_per_second = static_cast<int>(waits - waits_window_start);
+        dropped_per_second = static_cast<int>(dropped - dropped_window_start);
+        holds_window_start = holds;
+        waits_window_start = waits;
+        dropped_window_start = dropped;
     }
 }
 
@@ -856,12 +880,30 @@ void draw_menu(float screen_width, float screen_height) {
 }
 
 void draw_fps() {
-    char text[32];
-    std::snprintf(text, sizeof(text), "%d FPS", fps);
+    char line1[32];
+    char line2[48];
+    char line3[48];
+    std::snprintf(line1, sizeof(line1), "%d FPS", fps);
+    const bool interpolating = nx::interpolating();
+    if (interpolating) {
+        std::snprintf(line2, sizeof(line2), "p1 %uus  p2 %uus",
+                      goemon64nx_pass1_us.load(std::memory_order_relaxed),
+                      goemon64nx_pass2_us.load(std::memory_order_relaxed));
+        std::snprintf(line3, sizeof(line3), "hold %d  wait %d  drop %d", holds_per_second,
+                      waits_per_second, dropped_per_second);
+    }
     ImDrawList *draw = ImGui::GetForegroundDrawList();
-    const ImVec2 size = ImGui::CalcTextSize(text);
-    draw->AddRectFilled({12.0f, 12.0f}, {28.0f + size.x, 20.0f + size.y}, IM_COL32(0, 0, 0, 160), 6.0f);
-    draw->AddText({20.0f, 16.0f}, OVERLAY_TEXT, text);
+    const ImVec2 size1 = ImGui::CalcTextSize(line1);
+    const ImVec2 size2 = interpolating ? ImGui::CalcTextSize(line2) : ImVec2{0.0f, 0.0f};
+    const ImVec2 size3 = interpolating ? ImGui::CalcTextSize(line3) : ImVec2{0.0f, 0.0f};
+    const float width = interpolating ? std::max(size1.x, std::max(size2.x, size3.x)) : size1.x;
+    const float height = interpolating ? size1.y + size2.y + size3.y + 4.0f : size1.y;
+    draw->AddRectFilled({12.0f, 12.0f}, {28.0f + width, 20.0f + height}, IM_COL32(0, 0, 0, 160), 6.0f);
+    draw->AddText({20.0f, 16.0f}, OVERLAY_TEXT, line1);
+    if (interpolating) {
+        draw->AddText({20.0f, 16.0f + size1.y + 2.0f}, OVERLAY_TEXT, line2);
+        draw->AddText({20.0f, 16.0f + size1.y + size2.y + 4.0f}, OVERLAY_TEXT, line3);
+    }
 }
 
 // GLideN64 keeps its own GL state cache: everything the ImGui backend does not restore itself is

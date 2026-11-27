@@ -26,7 +26,13 @@ extern u32 rectDepthBufferCopyFrame;
 u32 RSP_SegmentToPhysicalEx(u32 segaddr);
 #define RSP_SegmentToPhysical( segaddr ) RSP_SegmentToPhysicalEx(segaddr)
 
+void RT64EX_OnMatrix(u32 address, u8 param, f32 mtx[4][4]);
+void RT64EX_OnVertices(u32 address, u32 size);
 void RT64EX_OnCommand(u32 w0, u32 w1);
+// A culling or branch decision taken on transformed vertices (G_CULLDL, G_BRANCH_Z/W).
+bool RT64EX_OnDecision(bool taken);
+// Skip the CPU triangle walk that only measures buffer height once the main FB is full (GraphicsDrawer.cpp).
+extern bool g_goemon64nxSkipKnownMaxY;
 
 void RSP_Init();
 void RSP_ProcessDList();

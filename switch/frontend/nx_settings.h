@@ -10,6 +10,7 @@ namespace nx {
 enum class Setting {
     AspectRatio,
     Resolution,
+    FrameRate,
     ShowFps,
     MasterVolume,
     MusicVolume,
@@ -58,6 +59,11 @@ inline int resolution_factor() {
 
 inline bool widescreen() {
     return at_startup(Setting::AspectRatio) == 0;
+}
+
+// Setting::FrameRate: 0 = 30 (original), 1 = 60 (interpolated). Default 60.
+inline bool interpolating() {
+    return get(Setting::FrameRate) == 1;
 }
 
 } // namespace nx
